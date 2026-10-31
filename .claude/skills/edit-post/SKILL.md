@@ -22,8 +22,8 @@ The goal of any edit is a post that sounds like the author wrote it, not a
 4. **Check the history first:** `git log --follow -p -- _posts/<file>`. If an
    earlier version exists from before the 2025 rewrite, restore it and only
    fix typos and broken things (this was done for the GRUB and Kerberos posts).
-5. The edited post must pass `make prose POST=_posts/<file>` with zero
-   warnings, and `make check` must pass.
+5. `make check` must pass. It includes the prose check, which fails on any
+   warning in any post; `make prose POST=_posts/<file>` checks one post.
 
 ## The author's voice
 

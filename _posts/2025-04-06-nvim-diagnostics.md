@@ -180,8 +180,6 @@ vim.keymap.set("n", "<leader>dv", function()
 end, { desc = "Toggle diagnostics virtual text" })
 ```
 
-## Summary
-
 Neovim’s diagnostics system is flexible and scriptable. When diagnostics don’t
 behave as expected, the issue may be as simple as a config setting like
 `virtual_text` being disabled.
