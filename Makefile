@@ -12,7 +12,7 @@ RUBY_VERSION := $(shell cat .ruby-version)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install serve build lint links test check new-post serve-container clean
+.PHONY: help install serve build lint prose links test check new-post serve-container clean
 
 help: ## List available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  make %-16s %s\n", $$1, $$2}'
@@ -35,6 +35,9 @@ build: ## Production build into _site; fails on any Jekyll warning
 lint: ## Validate post filenames and front matter
 	@ruby tools/check_posts.rb
 
+prose: ## Flag LLM-style writing in posts (warnings only; POST=_posts/x.md for one post)
+	@ruby tools/check_prose.rb $(if $(POST),--strict $(POST))
+
 links: ## Check internal links, images and scripts in the built site
 	@out=$$(bundle exec htmlproofer $(SITE) --disable-external \
 		--ignore-urls "/^http:\/\/127.0.0.1/,/^http:\/\/0.0.0.0/,/^http:\/\/localhost/" 2>&1); \
@@ -45,7 +48,8 @@ links: ## Check internal links, images and scripts in the built site
 test: ## Browser smoke tests (Playwright) against the built site
 	npx playwright test
 
-check: lint build links test ## Everything CI runs: lint, build, links, browser tests
+check: lint build links test ## Everything CI runs: lint, build, links, browser tests (+ prose summary)
+	@ruby tools/check_prose.rb --quiet
 
 new-post: ## Create a post: make new-post TITLE="My title" [DATE=YYYY-MM-DD]
 	@test -n "$(TITLE)" || { echo 'Usage: make new-post TITLE="My title" [DATE=YYYY-MM-DD]'; exit 1; }
