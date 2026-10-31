@@ -1,4 +1,4 @@
 {
-    "recommendations": ["ms-vscode-remote.remote-containers"]
-  }
-  
+	"recommendations": ["astro-build.astro-vscode", "unifiedjs.vscode-mdx", "ms-vscode-remote.remote-containers"],
+	"unwantedRecommendations": []
+}
