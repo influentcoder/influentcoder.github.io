@@ -15,11 +15,16 @@ Everything goes through `make` (run `make help` for the list):
 | `make serve` | Dev server with live rebuild at http://127.0.0.1:4000 |
 | `make check` | **Run before every push.** Lint posts, production build, link check, browser tests. CI runs exactly this. |
 | `make new-post TITLE="..."` | Create a post with the required front matter |
+| `make prose` | Flag LLM-style writing in posts (warnings). `make prose POST=_posts/x.md` is strict for one post. |
 | `make lint` / `build` / `links` / `test` | The individual steps of `make check` (`test` and `links` need a prior `build`) |
 
 Requires Ruby (version in `.ruby-version`) and Node 22.
 
 ## Writing posts
+
+**Before changing any post's wording or structure, use the `edit-post` skill**
+(`.claude/skills/edit-post/SKILL.md`). It describes the author's voice and the
+rules for editing: never invent experience, run every command, keep the URL.
 
 - Files: `_posts/YYYY-MM-DD-lowercase-slug.md`. The slug becomes the URL
   (`/posts/<slug>/`), so **never rename an existing post**; it breaks links.
