@@ -103,7 +103,7 @@ from-t2
 exit code: 1
 ```
 
-This one surprised me a bit at first. The `from-t2` directory is visible,
+The `from-t2` directory is visible,
 because it was created on the `/mnt/demo` tmpfs, which both namespaces use.
 But the mount on top of it only exists in terminal 2's namespace, so from
 terminal 1 the directory is empty. Namespaces isolate mounts, not files.
@@ -299,7 +299,7 @@ the propagation flags.
 
 ## Inspecting mount namespaces
 
-The commands I used above, plus a few more:
+The commands used above, plus a few more:
 
 * `findmnt -o TARGET,PROPAGATION` shows the propagation of each mount.
 * `/proc/<pid>/mountinfo` shows the mount table of any process, with the
