@@ -3,6 +3,9 @@ layout: post
 title:  "Communicate, Communicate, Communicate: Lessons from a Platform Change Gone Wrong"
 date:   2025-04-20 00:00:00 +0800
 categories: other
+description: >-
+  Lessons from a low-risk platform change that broke things at scale, and what good change communication looks like, with an email template.
+tags: [communication, change-management, platform-engineering]
 ---
 
 As engineers, we often focus on writing safe code, deploying with care, and

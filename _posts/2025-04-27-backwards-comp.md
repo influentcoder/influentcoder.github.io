@@ -3,6 +3,9 @@ layout: post
 title:  "The Hidden Cost of Change: Lessons on Backward Compatibility from Building Platforms and APIs"
 date:   2025-04-27 00:00:00 +0800
 categories: other
+description: >-
+  Backward compatibility goes beyond endpoints and fields: real stories of breaking changes in platforms and APIs, and how to avoid them.
+tags: [backward-compatibility, api-design, platform-engineering]
 ---
 
 > Building platforms, APIs, and shared libraries isn’t just about clean code.
