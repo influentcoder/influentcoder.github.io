@@ -52,6 +52,9 @@ jobs:
       - name: Check site
         run: make check
 
+      - name: Validate Envoy configs in the Envoy post
+        run: make envoy-examples
+
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v4
