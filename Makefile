@@ -7,12 +7,14 @@ export RUBYOPT := -Eutf-8
 
 SITE := _site
 PORT ?= 4000
+ENVOY_IMAGE := envoyproxy/envoy:v1.34.1
+ENVOY_DIR := .envoy-examples
 CONTAINER ?= podman
 RUBY_VERSION := $(shell cat .ruby-version)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install serve build lint prose links test check new-post serve-container clean
+.PHONY: help install serve build lint prose links test check envoy-examples new-post serve-container clean
 
 help: ## List available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  make %-16s %s\n", $$1, $$2}'
@@ -32,8 +34,9 @@ build: ## Production build into _site; fails on any Jekyll warning
 		printf "\nBuild produced warnings (see above). Fix them before pushing.\n"; rm -f .build.log; exit 1; \
 	fi; rm -f .build.log
 
-lint: ## Validate post filenames and front matter
+lint: ## Validate post filenames and front matter, and the Envoy post's config excerpts
 	@ruby tools/check_posts.rb
+	@ruby tools/check_envoy_examples.rb
 
 prose: ## Flag LLM-style writing in posts (warnings only; POST=_posts/x.md for one post)
 	@ruby tools/check_prose.rb $(if $(POST),--strict $(POST))
@@ -51,6 +54,17 @@ test: ## Browser smoke tests (Playwright) against the built site
 check: lint build links test ## Everything CI runs: lint, build, links, browser tests (+ prose summary)
 	@ruby tools/check_prose.rb --quiet
 
+envoy-examples: ## Validate the Envoy post's full configs with Envoy (needs Docker; CI runs this)
+	@rm -rf $(ENVOY_DIR) && ruby tools/check_envoy_examples.rb _posts/2025-06-01-envoy.md $(ENVOY_DIR)
+	@mkdir -p $(ENVOY_DIR)/certs && openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=edge.example.org \
+		-keyout $(ENVOY_DIR)/certs/edge.key -out $(ENVOY_DIR)/certs/edge.crt 2>/dev/null
+	@for f in $(ENVOY_DIR)/config-*.yaml; do \
+		echo "Validating $$f with $(ENVOY_IMAGE)"; \
+		docker run --rm -e ENVOY_UID=0 -v "$(CURDIR)/$(ENVOY_DIR):/examples:ro" \
+			-v "$(CURDIR)/$(ENVOY_DIR)/certs:/etc/envoy/certs:ro" \
+			$(ENVOY_IMAGE) --mode validate -c /examples/$$(basename $$f) || exit 1; \
+	done
+
 new-post: ## Create a post: make new-post TITLE="My title" [DATE=YYYY-MM-DD]
 	@test -n "$(TITLE)" || { echo 'Usage: make new-post TITLE="My title" [DATE=YYYY-MM-DD]'; exit 1; }
 	@ruby tools/new_post.rb "$(TITLE)" $(DATE)
@@ -61,4 +75,4 @@ serve-container: ## Same as serve, but inside a Ruby container (CONTAINER=podman
 		sh -c "bundle install && bundle exec jekyll serve --host 0.0.0.0 --port $(PORT) --force_polling"
 
 clean: ## Remove build output and caches
-	rm -rf $(SITE) .jekyll-cache test-results playwright-report
+	rm -rf $(SITE) .jekyll-cache test-results playwright-report $(ENVOY_DIR)

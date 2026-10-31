@@ -13,6 +13,9 @@ _site
 # NPM dependencies
 node_modules
 
+# Envoy config validation output (make envoy-examples)
+.envoy-examples
+
 # Playwright output
 test-results
 playwright-report
