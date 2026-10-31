@@ -1,27 +1,27 @@
 {
-    "version": "2.0.0",
-    "tasks": [
-      {
-        "label": "Run Jekyll Server",
-        "type": "shell",
-        "command": "./tools/run.sh",
-        "group": {
-          "kind": "build",
-          "isDefault": true
-        },
-        "problemMatcher": [],
-        "detail": "Runs the Jekyll server with live reload."
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run Jekyll Server",
+      "type": "shell",
+      "command": "make serve",
+      "group": {
+        "kind": "build",
+        "isDefault": true
       },
-      {
-        "label": "Build Jekyll Site",
-        "type": "shell",
-        "command": "./tools/test.sh",
-        "group": {
-          "kind": "build"
-        },
-        "problemMatcher": [],
-        "detail": "Build the Jekyll site for production."
-      }
-    ]
-  }
-  
+      "problemMatcher": [],
+      "detail": "Runs the Jekyll server with live reload."
+    },
+    {
+      "label": "Check Site",
+      "type": "shell",
+      "command": "make check",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "detail": "Lint posts, production build, link check and browser smoke tests."
+    }
+  ]
+}
