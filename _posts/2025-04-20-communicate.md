@@ -4,7 +4,7 @@ title:  "Communicate, Communicate, Communicate: Lessons from a Platform Change G
 date:   2025-04-20 00:00:00 +0800
 categories: [Engineering]
 description: >-
-  Lessons from a low-risk platform change that broke things at scale, and what good change communication looks like, with an email template.
+  When we make changes to a core platform component, running hundreds of millions of times a day, there's another responsibility that's just as important: communication.
 tags: [communication, change-management, platform-engineering]
 ---
 
