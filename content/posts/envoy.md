@@ -1,0 +1,570 @@
+---
+title: "Envoy configuration in an enterprise ecosystem"
+description: >-
+  Envoy configuration is tough to set up when some services use mTLS with short-lived SPIFFE certificates, some only speak HTTP/1, and some need custom auth.
+publishDate: 2025-06-01
+tags: [cloud, networking, envoy, proxy, mtls, spiffe]
+---
+
+I used Envoy a lot at work, especially as a reverse proxy at the edge, but also
+as sidecars. Over time I had to set up rate limiting, TLS termination, RBAC,
+custom authentication, and some more specific things like proxying requests to
+another proxy that requires mTLS.
+
+Envoy configuration is tough to set up, especially in an enterprise ecosystem
+where some services use mTLS with short-lived certificates (SPIRE/SPIFFE), some
+systems only speak HTTP/1, some require custom auth, and so on.
+
+In this post, I'll go through the parts of the configuration that deal with
+each of these, using a made-up setup. The two full configs are at the end of
+the post, and both pass `envoy --mode validate` with Envoy 1.34.
+
+## The example setup
+
+* An edge Envoy receives HTTPS requests from clients on port 8443.
+* Requests to `/payments/` go to the payments service, which has its own Envoy
+  sidecar and only accepts mTLS with SPIFFE certificates.
+* Requests to `/legacy/` go to an old service that only speaks plain HTTP/1.1.
+* Every request must be approved by an internal auth service first.
+* A SPIRE agent runs on each host and issues the SPIFFE certificates.
+
+As a reminder of how an Envoy config is organised: a listener accepts
+connections, its filter chain decides how to handle them (TLS, then the HTTP
+connection manager), the HTTP filters run on each request in order, the router
+picks a route, and the route points to a cluster, which is a group of upstream
+endpoints. Most of what follows is about putting each setting at the right
+level of this tree.
+
+## TLS termination at the edge
+
+TLS for the clients is configured on the listener's filter chain, with a
+`DownstreamTlsContext`. At the edge, the certificate is the public one, so it
+usually comes from files:
+
+```yaml
+- transport_socket:
+    name: envoy.transport_sockets.tls
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+      common_tls_context:
+        tls_certificates:
+        - certificate_chain: { filename: /etc/envoy/certs/edge.crt }
+          private_key: { filename: /etc/envoy/certs/edge.key }
+```
+
+Envoy then talks to the clusters behind it with whatever each cluster is
+configured for, which can be plain HTTP or a different TLS setup.
+
+## Rate limiting
+
+The local rate limit filter is a token bucket. Here, each Envoy instance allows
+100 requests per second, and returns a 429 once the bucket is empty:
+
+```yaml
+- name: envoy.filters.http.local_ratelimit
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+    stat_prefix: edge_rate_limit
+    token_bucket:
+      max_tokens: 100
+      tokens_per_fill: 100
+      fill_interval: 1s
+    filter_enabled:
+      runtime_key: edge_rate_limit_enabled
+      default_value: { numerator: 100, denominator: HUNDRED }
+    filter_enforced:
+      runtime_key: edge_rate_limit_enforced
+      default_value: { numerator: 100, denominator: HUNDRED }
+```
+
+The limit applies per Envoy instance. With several edge proxies behind a load
+balancer, the real limit is 100 times the number of instances. For a limit
+shared across instances (or per user, per API key, etc.), there's the global
+rate limit filter, which calls an external rate limit service.
+
+HTTP filters run in the order they are listed. Putting rate limiting before
+the auth filter means a flood of requests is rejected before it reaches the
+auth service.
+
+## Custom authentication with ext_authz
+
+When the auth rules are specific to the company, the `ext_authz` filter lets
+Envoy delegate the decision to an internal service. For each request, Envoy
+sends the method, the path and a few headers, including `Authorization`, to
+the auth service (more headers can be added with `allowed_headers`). If it
+answers with a 200, the request continues. Otherwise, its response is returned
+to the client.
+
+```yaml
+- name: envoy.filters.http.ext_authz
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+    transport_api_version: V3
+    failure_mode_allow: false
+    http_service:
+      server_uri:
+        uri: http://authz.internal:9000
+        cluster: authz
+        timeout: 0.5s
+```
+
+`failure_mode_allow: false` means that if the auth service is down or times
+out, requests are rejected rather than let through.
+
+## mTLS with short-lived SPIFFE certificates
+
+With SPIRE, the certificates
+(SVIDs) are short-lived and rotated often, so Envoy can't load them from files
+like the edge certificate. Instead, the SPIRE agent exposes Envoy's Secret
+Discovery Service (SDS) API on its Workload API socket, and Envoy asks it for
+its certificate and for the trust bundle. When SPIRE rotates the certificate,
+Envoy gets the new one without a restart.
+
+On the edge, the payments cluster uses an `UpstreamTlsContext` that gets both
+from SPIRE, and only accepts the server if its certificate has the payments
+SPIFFE ID:
+
+```yaml
+transport_socket:
+  name: envoy.transport_sockets.tls
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+    sni: payments.internal
+    common_tls_context:
+      tls_certificate_sds_secret_configs:
+      - name: spiffe://example.org/edge-proxy
+        sds_config:
+          resource_api_version: V3
+          api_config_source:
+            api_type: GRPC
+            transport_api_version: V3
+            grpc_services:
+            - envoy_grpc: { cluster_name: spire_agent }
+      combined_validation_context:
+        default_validation_context:
+          match_typed_subject_alt_names:
+          - san_type: URI
+            matcher: { exact: spiffe://example.org/payments }
+        validation_context_sds_secret_config:
+          name: spiffe://example.org
+          sds_config:
+            resource_api_version: V3
+            api_config_source:
+              api_type: GRPC
+              transport_api_version: V3
+              grpc_services:
+              - envoy_grpc: { cluster_name: spire_agent }
+```
+
+The names matter: `spiffe://example.org/edge-proxy` is the SPIFFE ID Envoy
+asks a certificate for, and `spiffe://example.org` is the trust domain whose
+bundle is used to validate the other side. As soon as Envoy uses SDS, it also
+needs a node `id` and `cluster` (the `node` block at the top of the full
+configs), otherwise it refuses to start with "node 'id' and 'cluster' are
+required". SPIRE also needs a registration
+entry for the Envoy process, otherwise the agent won't issue it anything.
+
+Envoy reaches the SPIRE agent through a normal cluster, pointing at the Unix
+socket. SDS is a gRPC API, so this cluster needs HTTP/2:
+
+```yaml
+- name: spire_agent
+  type: STATIC
+  connect_timeout: 1s
+  typed_extension_protocol_options:
+    envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+      "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+      explicit_http_config:
+        http2_protocol_options: {}
+  load_assignment:
+    cluster_name: spire_agent
+    endpoints:
+    - lb_endpoints:
+      - endpoint:
+          address:
+            pipe: { path: /run/spire/sockets/agent.sock }
+```
+
+The same `UpstreamTlsContext` also works to proxy requests to another proxy
+that requires mTLS. If that proxy isn't part of the SPIFFE setup, the client
+certificate can come from files (`tls_certificates`) rather than SDS.
+
+## Without the sidecar: an mTLS proxy SDK in Go
+
+In one case, our Go applications had to go through an mTLS-protected proxy to
+reach other applications. Typically, this would be handled by a sidecar that
+takes care of the certificate rotation and of the connection to the proxy, and
+the application would use the sidecar as a regular, unauthenticated HTTP
+proxy.
+
+But this approach led to a sprawl of sidecars, which are resource intensive.
+So in the end, I developed an SDK in Go that the applications can use
+directly. It greatly simplified the architecture, at the cost of the
+application having to know about mTLS, though it is abstracted in the SDK.
+
+The main challenge is that Go libraries can't natively do mTLS authentication
+to an HTTP proxy, so I had to write some custom TLS handlers. To make things
+more complex, some of the applications behind the mTLS-authenticated proxy also
+require their own TLS, or even worse, their own mTLS. So writing the SDK, and
+testing it, was very tricky.
+
+## Upstreams that only speak HTTP/1
+
+Envoy uses HTTP/1.1 to talk to a cluster unless told otherwise, whatever the
+client used. So a client can talk HTTP/2 to the edge, and Envoy will still
+talk HTTP/1.1 to the legacy service. Setting it explicitly makes it clear when
+reading the config:
+
+```yaml
+- name: legacy
+  type: STRICT_DNS
+  connect_timeout: 1s
+  typed_extension_protocol_options:
+    envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+      "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+      explicit_http_config:
+        http_protocol_options: {}
+```
+
+It's the opposite for gRPC services or services that need HTTP/2 (like the
+payments service and the SPIRE agent above): those need
+`http2_protocol_options`, otherwise Envoy sends them HTTP/1.1 and the requests
+fail.
+
+## RBAC on the sidecar
+
+On the payments side, the sidecar requires a client certificate, again from
+SPIRE:
+
+```yaml
+typed_config:
+  "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+  require_client_certificate: true
+```
+
+Once the client certificate is verified, its SPIFFE ID is the "principal" that
+the RBAC filter can check. Here, only the edge proxy is allowed, and only on
+`/payments/`. With `action: ALLOW`, anything that doesn't match a policy gets
+a 403:
+
+```yaml
+- name: envoy.filters.http.rbac
+  typed_config:
+    "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC
+    rules:
+      action: ALLOW
+      policies:
+        edge-proxy:
+          permissions:
+          - url_path:
+              path: { prefix: "/payments/" }
+          principals:
+          - authenticated:
+              principal_name: { exact: spiffe://example.org/edge-proxy }
+```
+
+The application behind the sidecar can also get the caller's SPIFFE ID, in the
+`x-forwarded-client-cert` header:
+
+```yaml
+forward_client_cert_details: SANITIZE_SET
+set_current_client_cert_details: { uri: true }
+```
+
+## Debugging
+
+When something doesn't work, these are the places to look:
+
+* `envoy --mode validate -c envoy.yaml` checks the config without starting the
+  proxy. It doesn't connect to anything, so it won't catch a wrong hostname or a
+  certificate problem.
+* The admin interface (on `127.0.0.1:9901` in the configs below):
+  * `/config_dump` shows the config Envoy actually loaded, including the
+    secrets received over SDS (without the private keys).
+  * `/certs` lists the loaded certificates and when they expire, which is
+    useful with short-lived certificates.
+  * `/clusters` shows each upstream host and its health.
+  * `/stats?filter=ssl` shows TLS handshake errors and certificate
+    verification failures.
+* The access log on the edge config includes `%RESPONSE_FLAGS%` and
+  `%UPSTREAM_TRANSPORT_FAILURE_REASON%`. The flags tell you why Envoy itself
+  answered (for example `UF` when it couldn't connect upstream, `RL` when rate
+  limited), and the failure reason usually contains the TLS error when the
+  mTLS handshake with an upstream fails.
+
+## The full configs
+
+The edge proxy:
+
+```yaml
+admin:
+  address:
+    socket_address: { address: 127.0.0.1, port_value: 9901 }
+
+node:
+  id: edge-proxy
+  cluster: edge
+
+static_resources:
+  listeners:
+  - name: edge_https
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 8443 }
+    filter_chains:
+    - transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+          common_tls_context:
+            tls_certificates:
+            - certificate_chain: { filename: /etc/envoy/certs/edge.crt }
+              private_key: { filename: /etc/envoy/certs/edge.key }
+      filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: edge
+          access_log:
+          - name: envoy.access_loggers.stdout
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+              log_format:
+                text_format_source:
+                  inline_string: "%START_TIME% %REQ(:METHOD)% %REQ(:PATH)% %RESPONSE_CODE% %RESPONSE_FLAGS% %UPSTREAM_CLUSTER% %UPSTREAM_TRANSPORT_FAILURE_REASON%\n"
+          http_filters:
+          - name: envoy.filters.http.local_ratelimit
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+              stat_prefix: edge_rate_limit
+              token_bucket:
+                max_tokens: 100
+                tokens_per_fill: 100
+                fill_interval: 1s
+              filter_enabled:
+                runtime_key: edge_rate_limit_enabled
+                default_value: { numerator: 100, denominator: HUNDRED }
+              filter_enforced:
+                runtime_key: edge_rate_limit_enforced
+                default_value: { numerator: 100, denominator: HUNDRED }
+          - name: envoy.filters.http.ext_authz
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+              transport_api_version: V3
+              failure_mode_allow: false
+              http_service:
+                server_uri:
+                  uri: http://authz.internal:9000
+                  cluster: authz
+                  timeout: 0.5s
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+          route_config:
+            virtual_hosts:
+            - name: edge
+              domains: ["*"]
+              routes:
+              - match: { prefix: "/payments/" }
+                route: { cluster: payments }
+              - match: { prefix: "/legacy/" }
+                route: { cluster: legacy }
+
+  clusters:
+  - name: payments
+    type: STRICT_DNS
+    connect_timeout: 1s
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config:
+          http2_protocol_options: {}
+    load_assignment:
+      cluster_name: payments
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: { address: payments.internal, port_value: 8443 }
+    transport_socket:
+      name: envoy.transport_sockets.tls
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+        sni: payments.internal
+        common_tls_context:
+          tls_certificate_sds_secret_configs:
+          - name: spiffe://example.org/edge-proxy
+            sds_config:
+              resource_api_version: V3
+              api_config_source:
+                api_type: GRPC
+                transport_api_version: V3
+                grpc_services:
+                - envoy_grpc: { cluster_name: spire_agent }
+          combined_validation_context:
+            default_validation_context:
+              match_typed_subject_alt_names:
+              - san_type: URI
+                matcher: { exact: spiffe://example.org/payments }
+            validation_context_sds_secret_config:
+              name: spiffe://example.org
+              sds_config:
+                resource_api_version: V3
+                api_config_source:
+                  api_type: GRPC
+                  transport_api_version: V3
+                  grpc_services:
+                  - envoy_grpc: { cluster_name: spire_agent }
+
+  - name: legacy
+    type: STRICT_DNS
+    connect_timeout: 1s
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config:
+          http_protocol_options: {}
+    load_assignment:
+      cluster_name: legacy
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: { address: legacy.internal, port_value: 8080 }
+
+  - name: authz
+    type: STRICT_DNS
+    connect_timeout: 1s
+    load_assignment:
+      cluster_name: authz
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: { address: authz.internal, port_value: 9000 }
+
+  - name: spire_agent
+    type: STATIC
+    connect_timeout: 1s
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config:
+          http2_protocol_options: {}
+    load_assignment:
+      cluster_name: spire_agent
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              pipe: { path: /run/spire/sockets/agent.sock }
+```
+
+The payments sidecar:
+
+```yaml
+admin:
+  address:
+    socket_address: { address: 127.0.0.1, port_value: 9901 }
+
+node:
+  id: payments-sidecar
+  cluster: payments
+
+static_resources:
+  listeners:
+  - name: inbound_mtls
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 8443 }
+    filter_chains:
+    - transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+          require_client_certificate: true
+          common_tls_context:
+            tls_certificate_sds_secret_configs:
+            - name: spiffe://example.org/payments
+              sds_config:
+                resource_api_version: V3
+                api_config_source:
+                  api_type: GRPC
+                  transport_api_version: V3
+                  grpc_services:
+                  - envoy_grpc: { cluster_name: spire_agent }
+            validation_context_sds_secret_config:
+              name: spiffe://example.org
+              sds_config:
+                resource_api_version: V3
+                api_config_source:
+                  api_type: GRPC
+                  transport_api_version: V3
+                  grpc_services:
+                  - envoy_grpc: { cluster_name: spire_agent }
+      filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: inbound
+          forward_client_cert_details: SANITIZE_SET
+          set_current_client_cert_details: { uri: true }
+          http_filters:
+          - name: envoy.filters.http.rbac
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC
+              rules:
+                action: ALLOW
+                policies:
+                  edge-proxy:
+                    permissions:
+                    - url_path:
+                        path: { prefix: "/payments/" }
+                    principals:
+                    - authenticated:
+                        principal_name: { exact: spiffe://example.org/edge-proxy }
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+          route_config:
+            virtual_hosts:
+            - name: local_app
+              domains: ["*"]
+              routes:
+              - match: { prefix: "/" }
+                route: { cluster: local_app }
+
+  clusters:
+  - name: local_app
+    type: STATIC
+    connect_timeout: 1s
+    load_assignment:
+      cluster_name: local_app
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: { address: 127.0.0.1, port_value: 8080 }
+
+  - name: spire_agent
+    type: STATIC
+    connect_timeout: 1s
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config:
+          http2_protocol_options: {}
+    load_assignment:
+      cluster_name: spire_agent
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              pipe: { path: /run/spire/sockets/agent.sock }
+```
+
+## Additional resources
+
+* [The Envoy documentation](https://www.envoyproxy.io/docs/envoy/latest/), in
+  particular the
+  [configuration reference](https://www.envoyproxy.io/docs/envoy/latest/configuration/configuration).
+* [SPIRE's guide to using Envoy with X.509 SVIDs](https://spiffe.io/docs/latest/microservices/envoy/),
+  which covers the SPIRE side (registration entries, the agent socket).

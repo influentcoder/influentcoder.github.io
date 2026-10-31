@@ -1,0 +1,639 @@
+---
+title: "FUSE: Building Filesystems in Userspace"
+description: >-
+  When I first encountered FUSE, I didn't immediately realize how useful it could be. Then a colleague casually suggested: "You could mount it with FUSE."
+publishDate: 2025-04-13
+tags: [linux, filesystems, fuse, linux-kernel, c]
+---
+
+When I first encountered FUSE, I didn’t immediately realize how useful it could
+be. At the time, I was working on a platform that needed to ingest data from an
+internal storage API - something proprietary, not POSIX-compliant, and
+generally awkward to work with. It exposed a set of blob-like objects that had
+to be fetched over HTTP using a weird combination of auth headers and query
+params. But the tools in our data pipeline - things like `grep`, `cat`, and
+even some third-party binaries - all expected normal file paths.
+
+We needed a bridge between these tools and our non-standard storage system, and
+I was initially thinking of writing some kind of wrapper script or temporary
+downloader. But a colleague casually suggested, "You could mount it with FUSE."
+I’d used sshfs before, but I hadn’t thought about building a custom filesystem
+myself.
+
+A bit of digging later, I realized FUSE could give us a clean, maintainable
+solution: present the blobs as files in a directory, handle requests on the
+fly, and keep the rest of the pipeline unchanged. No need to rewrite tools, no
+need to deal with temp files. I ended up writing a simple FUSE daemon in C that
+mapped each blob to a file under `/mnt/blobs/`, and the team adopted it as a
+default interface to our internal storage.
+
+## What is FUSE?
+
+FUSE stands for Filesystem in Userspace, and that’s exactly what it gives you:
+the ability to implement a fully functional filesystem entirely in user space,
+like any other program. No kernel development, no system crashes if you get it
+wrong, no rebooting every 5 minutes to test your code.
+
+You write a user-space process that registers callbacks like read, write,
+readdir, and so on. The FUSE kernel module handles routing file system calls
+(via the VFS layer) to your process through a special device, `/dev/fuse`.
+
+## Why Is This Useful?
+
+FUSE lets you make anything look like a filesystem - and sometimes that’s
+exactly what you need. Filesystems are a universal interface. Practically every
+program knows how to open, read, and write files. That makes FUSE a great
+compatibility layer between your data and your tooling.
+
+### Some real-world examples
+
+Here’s how I’ve used (or seen others use) FUSE:
+
+* Mounting remote APIs: At work, we had a REST API that exposed internal
+metadata. We wanted a fast way to browse and grep through it using regular
+command-line tools. I wrote a FUSE mount where each resource appeared as a JSON
+file. It took half a day to build, and suddenly, grep, jq, and even vim worked
+on live API data.
+
+* Debugging weird I/O bugs: One time we had a flaky NFS integration, and I
+couldn’t reproduce the issue easily. So I wrote a FUSE layer that logged every
+file open and read operation with timestamps. That helped us catch a race
+condition in the client code - something strace hadn’t picked up.
+
+* Ad-hoc testing: For a CI tool, we needed to simulate a read-only
+filesystem with delayed access (to test timeouts). Let me expand on this a bit.
+
+We had a CI feature that had to detect timeouts correctly - for example, if a
+test tried to read from a slow or non-responding disk, it should fail
+gracefully after a timeout threshold.
+
+The typical way people test things like this is by:
+* Spinning up a full VM or container that simulates high I/O latency, or
+* Using a custom test binary that fakes a slow disk read
+
+But these approaches were either heavyweight (VMs/containers with poor
+performance reproducibility) or too synthetic (test stubs that don’t reflect
+real I/O patterns).
+
+What we really wanted was to use the actual codepath that performs real file
+reads, but inject slowness in a controlled way.
+
+So I wrote a tiny FUSE filesystem that:
+* On `read()`, simply sleeps for N seconds before returning data.
+* On `write()`, returns EPERM or EROFS to simulate a read-only system.
+* On `getattr()` and `readdir()`, behaves normally to simulate a valid FS
+layout.
+
+This way, the test could call open() or read() on a file in the mounted FUSE
+FS, and the read would stall for a set amount of time - just like if the disk
+or storage backend were unresponsive.
+
+This let us validate that timeout logic worked in the real file access path
+without mocking, without provisioning remote hosts, and without needing special
+hardware or network conditions. `tmpfs` wouldn’t help, because it's designed to
+be fast and in-memory - it doesn’t let you inject delays. And provisioning a VM
+just to simulate slow I/O would be much slower and less predictable than a
+100-line FUSE daemon.
+
+iHere's a minimal example of a FUSE filesystem in C that simulates slow reads
+and read-only behavior. It's based on
+[libfuse](https://github.com/libfuse/libfuse), and it works well for simulating
+test environments where disk access might hang or fail.
+
+#### Prerequisites
+
+Make sure you have the libfuse development headers installed:
+
+On Debian/Ubuntu:
+
+```bash
+sudo apt install libfuse3-dev
+```
+
+On Arch:
+
+```bash
+sudo pacman -S fuse3
+```
+
+Then compile the FUSE program with:
+
+```bash
+gcc slowfs.c -o slowfs `pkg-config fuse3 --cflags --libs`
+```
+
+#### `slowfs.c` - A Slow, Read-Only FUSE Filesystem
+
+```c
+#define FUSE_USE_VERSION 35
+#include <fuse3/fuse.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <time.h>
+
+// Simulated file content
+const char *file_path = "/slowfile.txt";
+const char *file_content = "This read is intentionally delayed.\n";
+
+// Delay duration in seconds
+const int read_delay_sec = 5;
+
+// Only one file exists
+static int slowfs_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) {
+    (void) fi;
+    memset(stbuf, 0, sizeof(struct stat));
+
+    if (strcmp(path, "/") == 0) {
+        stbuf->st_mode = S_IFDIR | 0555;
+        stbuf->st_nlink = 2;
+    } else if (strcmp(path, file_path) == 0) {
+        stbuf->st_mode = S_IFREG | 0444;
+        stbuf->st_nlink = 1;
+        stbuf->st_size = strlen(file_content);
+    } else {
+        return -ENOENT;
+    }
+    return 0;
+}
+
+static int slowfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+                          off_t offset, struct fuse_file_info *fi,
+                          enum fuse_readdir_flags flags) {
+    (void) offset;
+    (void) fi;
+    (void) flags;
+
+    if (strcmp(path, "/") != 0)
+        return -ENOENT;
+
+    filler(buf, ".", NULL, 0, 0);
+    filler(buf, "..", NULL, 0, 0);
+    filler(buf, file_path + 1, NULL, 0, 0); // remove leading /
+
+    return 0;
+}
+
+static int slowfs_open(const char *path, struct fuse_file_info *fi) {
+    if (strcmp(path, file_path) != 0)
+        return -ENOENT;
+
+    if ((fi->flags & O_ACCMODE) != O_RDONLY)
+        return -EACCES;
+
+    return 0;
+}
+
+static int slowfs_read(const char *path, char *buf, size_t size, off_t offset,
+                       struct fuse_file_info *fi) {
+    (void) fi;
+    if (strcmp(path, file_path) != 0)
+        return -ENOENT;
+
+    // Simulate a delay
+    sleep(read_delay_sec);
+
+    size_t len = strlen(file_content);
+    if (offset >= len)
+        return 0;
+    if (offset + size > len)
+        size = len - offset;
+
+    memcpy(buf, file_content + offset, size);
+    return size;
+}
+
+static struct fuse_operations slowfs_oper = {
+    .getattr = slowfs_getattr,
+    .readdir = slowfs_readdir,
+    .open    = slowfs_open,
+    .read    = slowfs_read,
+};
+
+int main(int argc, char *argv[]) {
+    return fuse_main(argc, argv, &slowfs_oper, NULL);
+}
+```
+
+#### Usage
+
+Mount the FS like this:
+
+```bash
+mkdir /tmp/slowmnt
+./slowfs /tmp/slowmnt
+```
+
+Then run:
+
+```bash
+cat /tmp/slowmnt/slowfile.txt
+```
+
+You should see a ~5 second pause before the file content is printed - exactly
+the sort of condition you'd want to test timeout logic for.
+
+#### Unmount
+
+Unmount when you're done:
+
+```bash
+fusermount3 -u /tmp/slowmnt
+```
+
+#### Customizations
+
+* Change `read_delay_sec` to simulate longer or shorter delays
+* Add more files with varying delays
+* Return errors like `EIO` or `ETIMEDOUT` if you want to simulate total
+failures
+
+# Comparing Traditional Filesystem Development vs FUSE
+
+| Aspect                  | Kernel Filesystem               | FUSE Filesystem                          |
+|-------------------------|----------------------------------|------------------------------------------|
+| Development Language    | Kernel-level C                 | User-space C, C++, Python, Go, etc.      |
+| Risk                    | High - crash = kernel panic    | Low - crash = process exits              |
+| Tooling                 | gdb, printk, reboot loops      | valgrind, gdb, logging, hot reloads      |
+| Deployment              | Kernel module install + reboot | Regular executable                       |
+| Dev iteration speed     | Slow                           | Fast                                     |
+| Access control          | Needs root                     | Run as regular user (with permission)    |
+
+With kernel filesystems, development is painful, debugging is slow, and failure
+can bring down the whole system. With FUSE, it feels like building any other
+user-space tool - just with hooks into the VFS.
+
+# How Does FUSE Work, Under the Hood?
+
+The FUSE architecture looks like this:
+
+```
+     ┌─────────────────┐
+     │    VFS layer    │
+     └────────┬────────┘
+              │
+     ┌────────▼────────┐
+     │ FUSE kernel mod │
+     └────────┬────────┘
+              │
+     ┌────────▼────────┐
+     │   /dev/fuse     │  ← character device
+     └────────┬────────┘
+              │
+     ┌────────▼────────┐
+     │  User program   │  ← written with libfuse
+     └─────────────────┘
+```
+
+When you mount a FUSE filesystem, your program starts and connects to
+`/dev/fuse`. The kernel sends filesystem requests through that pipe, and your
+code responds. It’s like writing a server, but for file operations.
+
+## Security and Sandboxing in FUSE
+
+FUSE runs in userspace, but that doesn’t mean it's automatically secure. If
+your filesystem exposes data that comes from users, integrates with external
+services, or runs in a multi-user environment (like a dev machine or server),
+you must harden your implementation. Here are some common vectors and the
+reasoning behind each - plus how we mitigated them in production.
+
+### Path Traversal Attacks
+
+A common mistake is to blindly join user input with a path, like this:
+
+```c
+snprintf(resolved_path, sizeof(resolved_path), "/data/blobs/%s", user_input);
+```
+
+If `user_input` is something like `"../../../etc/passwd"`, your filesystem
+could now expose system files unintentionally. This is especially dangerous if
+your FUSE layer acts as a proxy to local or remote storage paths.
+
+Mitigation:
+* Validate inputs rigorously: allow only known-safe characters and disallow
+`".."`, slashes, null bytes, etc.
+* Canonicalize and verify the real path with something like `realpath()` or
+`os.path.realpath()` in Python.
+* Use `openat()` or equivalent safe APIs where available.
+
+Further reading:
+* [Path Traversal Attacks](https://owasp.org/www-community/attacks/Path_Traversal)
+
+What we did in our work on blob filesystem:
+* Enforced blob ID patterns via regex and rejected any path that didn’t match.
+* Used `chroot()` to isolate the daemon to a scratch directory (in case of
+symlink shenanigans).
+* Added FUSE per-user namespaces so one user’s view couldn’t affect another’s.
+* Limited the number of mounted blobs per user via a wrapper daemon.
+
+### Symlink Abuse
+
+Even if you're validating user input, malicious users might exploit symlinks
+inside the backing store (e.g., a symlink pointing to `/etc/shadow` from inside
+your blob storage). If your FUSE implementation doesn’t detect this, a user
+could access it indirectly.
+
+Mitigation:
+* When opening files, use `O_NOFOLLOW` to prevent symlink traversal.
+* Use `lstat()` instead of `stat()` if you want to inspect a file but avoid
+following symlinks.
+* If you must allow symlinks, restrict them to a controlled whitelist of
+targets.
+
+Further reading:
+* [man 2 open – see O_NOFOLLOW](https://man7.org/linux/man-pages/man2/open.2.html)
+
+### DoS (Denial of Service)
+
+Your FUSE filesystem might receive extreme inputs - either by accident or on
+purpose:
+* A directory with 10 million entries
+* A file that reports st_size = 1TB
+* A read() loop that never returns EOF
+* A symlink loop that causes infinite resolution
+
+These can overwhelm your system, cause crashes, or exhaust memory.
+
+Mitigation:
+* Cap the number of directory entries in `readdir()`.
+* Impose size limits on virtual files.
+* Monitor and terminate long-running FUSE operations.
+* Consider setting resource limits (ulimit, cgroups) around your daemon.
+
+### Tools for Sandboxing FUSE
+
+If you’re running a FUSE daemon and want to lock it down further:
+* [bubblewrap](https://github.com/containers/bubblewrap): lightweight,
+unprivileged sandboxing. Good for isolating file access and syscalls.
+* [firejail](https://github.com/netblue30/firejail): another sandboxing tool
+with profiles for common apps.
+* [seccomp](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux_atomic_host/7/html/container_security_guide/linux_capabilities_and_seccomp#linux_capabilities):
+restrict syscalls for your FUSE process.
+* [Linux
+namespaces](https://man7.org/linux/man-pages/man7/namespaces.7.html): isolate
+mounts, users, network, etc.
+
+## Dynamic Mount Content: Files That Aren’t Really There
+
+In traditional filesystems, you write to disk, and that data sits there until
+you read it again. But in FUSE, your implementation decides what exists at any
+given time. You don’t need to back files with disk data - you can synthesize
+file contents from memory, APIs, or databases.
+
+This means you can build virtual filesystems where:
+* The directory layout changes dynamically based on a remote service
+* Files reflect real-time system or application state
+* File contents are generated on access - no caching or persistence needed
+* You can interact with the system using familiar tools like `cat`, `ls`, `watch`, `grep`, and `tail`
+
+### Real-World Example: Live Job Monitoring with FUSE
+
+At my current job, we have a distributed job orchestration/scheduling platform
+- think roughly about Kubernetes jobs, but internal.
+
+Each job has a unique name that looks like a file path, and some metadata:
+logs, current state, timing info, retries, etc.
+
+We have a very nice Web UI on top of it, but we felt that we also wanted an
+easy way to monitor jobs from the command line.
+
+We built a FUSE filesystem that exposed jobs like this:
+
+```
+/scheduler_instance/
+  some/
+    path/
+      job1/
+        job_def.json
+        status.json
+        logs/
+           stdout.txt
+           stderr.txt
+      job2/
+        ...
+```
+
+Each job name was a directory created dynamically by querying the scheduler
+API.
+* `readdir("/jobs")` would list all current active job IDs
+* `getattr("/<scheduler_instance>/some/path/job1/status.txt")` would fetch the
+job status from the scheduler.
+* `read("/jobs/12345/logs/stdout.txt")` would display or stream the live logs.
+
+When attempting this kind of thing, make sure that you are rate-limiting the
+backend queries - or even better, have some backend throttling if possible.
+
+You'll have to be careful that things like `tail` do not hammer your log store
+as well.
+
+This let us do things like:
+
+```bash
+# tail logs from a running job
+tail -f /<scheduler_instance>/some/path/job1/logs/stdout.txt
+
+# grep for failure messages
+grep 'failed' /<scheduler_instance>/some/path/job1/logs/stdout.txt
+
+# check runtime metrics
+cat /<scheduler_instance>/some/path/job1/status.json | jq
+```
+
+No custom CLI, no tokens, no REST client - just standard UNIX tools.
+
+## Writeback Caching
+
+FUSE3 supports writeback caching, which can boost performance by deferring
+writes until flush time. You enable it with:
+
+```bash
+-o writeback_cache
+```
+
+But be careful: this means your write() might not be immediately visible to
+readers, and flush() or fsync() becomes important. You'll need to handle
+consistency, especially for append-heavy files like logs.
+
+In one case, we saw unexpected data loss during crashes because we forgot to
+flush buffered writes to an API backend that expected real-time sync. Adding
+proper fsync handling and journaling logic fixed the problem.
+
+## File Handles and Context-Aware Access
+
+FUSE lets you track open file handles (fuse_file_info *fi) across operations
+like open(), read(), and write(). This is useful for per-descriptor state, such
+as authentication tokens or stream cursors.
+
+You can also access the fuse_context structure to get the calling user ID,
+group ID, and process ID:
+
+```c
+const struct fuse_context *ctx = fuse_get_context();
+uid_t uid = ctx->uid;
+```
+
+We used this in a multi-tenant system to ensure users could only access files
+tagged to their identity, enforcing auth at the filesystem level.
+
+There is a lot more to be told about this, but this is just to give some
+context and awareness.
+
+## Custom xattrs and Metadata
+
+FUSE supports extended attributes (xattrs), which are key-value metadata
+entries associated with files. You can use this to expose structured metadata
+like:
+* Access control labels
+* Hashes or checksums
+* Application-specific state
+
+Implement `getxattr()`, `setxattr()`, and friends to support tools like
+`getfattr` and `setfattr`.
+
+This could be used for example to expose git commit metadata inside a
+FUSE-based versioned filesystem. You could run:
+
+```bash
+getfattr -n user.commit_hash /mnt/project/file.txt
+```
+
+and get the hash of the last commit that touched the file.
+
+## Integration with Other Tools
+
+You can pair FUSE with other technologies to build powerful hybrid tools:
+* FUSE + inotify: Monitor access and trigger background refreshes
+* FUSE + SQLite: Store structured data and expose it as a hierarchical FS
+* FUSE + Redis: Build ephemeral or real-time virtual filesystems
+* FUSE + S3: Mirror remote object stores to look like local trees
+
+For example, you could use FUSE + inotify to build a filesystem, where when you
+drop a file, it starts some background process or calls some API, and writes
+back the results in another file.
+
+## Performance Considerations: When FUSE Slows You Down
+
+One of the first things you'll notice after building your first FUSE filesystem
+is that... it works! Your mount shows up, you can ls it, read and write files -
+magic. But the second thing you might notice is that it’s not exactly fast.
+
+FUSE trades performance for flexibility. Since your filesystem code runs in
+user space, every file operation crosses the kernel-user boundary - sometimes
+multiple times. That overhead matters, especially for workloads with lots of
+small file accesses or metadata-heavy operations.
+
+Let’s break down what to expect, and how to mitigate it.
+
+### Context Switching Overhead
+
+Every `read()`, `write()`, `stat()`, `readdir()` call involves a context switch
+between kernel and user space. Compare this to a native filesystem like ext4 or
+xfs, where those operations stay entirely in the kernel.
+
+In microbenchmarks, this adds up: even a simple `ls -lR` over a FUSE mount can
+be orders of magnitude slower than the same on tmpfs.
+
+Mitigation:
+* Implement caching aggressively (e.g., use `fuse_lowlevel` options to cache
+attributes or directory listings).
+* Use coarse-grained data access: batch data if you can instead of handling it
+file-by-file.
+
+### Small Files, Many Files = Trouble
+
+If your FUSE filesystem exposes hundreds or thousands of small files, things
+get slow fast. This is because:
+* Each file requires a `lookup` and often an `open`, `read`, and `release`
+call.
+* If your backend is remote (e.g., querying a DB or API), every `ls` may
+trigger dozens of requests.
+
+
+Mitigation:
+* Use lazy loading where possible (`readdir()` returns only basic stubs).
+* Implement and tune directory caching (e.g., store directory contents in
+memory with a TTL).
+* Avoid exposing the entire dataset if users don’t need it - build "virtual
+directories" that act more like search filters.
+
+### User-Space Logic Costs CPU Cycles
+
+If your FUSE implementation does heavy logic - say, transforming files on the
+fly, translating API responses, or calculating virtual contents - the cost
+shows up in real-time file access.
+
+Mitigation:
+* Profile your code! Use `perf`, `strace`, or even a simple timing wrapper
+around your FUSE handler functions.
+* Use compiled languages (C, Rust, Go) for performance-critical FUSE backends.
+* Move complex or slow logic to the background if possible (e.g., cache async
+results, or pre-generate common outputs).
+
+### Cold Start Penalties
+
+If your FUSE filesystem requires startup logic - loading a schema, connecting
+to an API, reading a config - users might experience delays during first
+access. This is often overlooked in simple demos but becomes frustrating in
+real-world tooling.
+
+Mitigation:
+* Initialize backends asynchronously.
+* Use placeholders or "warming" indicators if needed (ls can show "Loading..."
+files).
+* Persist session state across mounts, if applicable.
+
+### Fuse-daemon Bottlenecks
+
+FUSE operates through a daemon process - your filesystem. If that daemon
+becomes single-threaded or otherwise constrained (e.g., by Python’s GIL), all
+file operations will bottleneck on it.
+
+Mitigation:
+* Use threaded/concurrent backends (e.g., multithreaded Python with `fusepy`,
+or C++ with libfuse).
+* Use `-o multithreaded` when mounting, if your implementation supports it.
+* Monitor CPU usage and I/O patterns - tools like `htop`, `iotop`, and `strace`
+can be surprisingly helpful here.
+
+### Measuring Performance: Tools & Tips
+
+If you're unsure where the slowdown is happening:
+* Use `strace -f -tt -e trace=all` on your application to see how long system
+calls take.
+* Monitor your FUSE daemon with `perf`, `gdb`, or a flamegraph.
+* Use `time` and compare against a tmpfs mount to get a baseline.
+
+And when in doubt - benchmark! Even a crude `ls -lR`, `find`, or `fio` test can
+reveal orders-of-magnitude performance gaps.
+
+### When Performance Is Good Enough
+
+To be clear: not all FUSE filesystems are slow. If you’re building something
+for developer tooling, system introspection, or API simulation - FUSE’s
+performance is usually fine. I've deployed FUSE-backed tools that run daily,
+even hourly, as part of our CI infrastructure. The tradeoffs are almost always
+worth it when the goal is clarity, simplicity, or expressiveness, not raw
+throughput.
+
+But if you need serious IOPS - like 100,000+ file accesses per second, or
+sub-millisecond latency - FUSE probably isn’t the right tool. At that point,
+you should consider a kernel module, OverlayFS, or rethink whether you even
+need a filesystem abstraction.
+
+FUSE quietly opens the door to building your own filesystems - not in kernel
+space, but safely and flexibly from user space. That might sound niche, but
+it’s surprisingly practical.
+
+Over the years, I’ve used FUSE to wrap flaky test environments, turn APIs into
+file trees, prototype CLI tools, and even simulate distributed systems. It’s
+helped me debug things that were otherwise opaque and build tools that saved
+hours of manual effort.
+
+FUSE isn’t perfect - performance can lag, and full POSIX compliance is tricky -
+but for prototyping, developer tooling, and creative infrastructure work, it’s
+a powerful addition to your toolkit. If you’ve ever found yourself thinking "I
+wish I could just mount this as a directory..." - you probably can.
+
+Give it a try. You might be surprised what kinds of problems a little fake
+filesystem can solve.

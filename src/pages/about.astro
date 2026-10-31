@@ -1,0 +1,32 @@
+---
+import { Image } from "astro:assets";
+import avatar from "@/assets/avatar.webp";
+import SocialList from "@/components/SocialList.astro";
+import PageLayout from "@/layouts/Base.astro";
+
+const meta = {
+	description: "About the author of InfluentCoder",
+	title: "About",
+};
+---
+
+<PageLayout meta={meta}>
+	<h1 class="title mb-12">About</h1>
+	<Image alt="" class="mb-8 rounded-full" height={112} src={avatar} width={112} />
+	<div class="prose prose-sm prose-cactus max-w-none">
+		<h2>Professional Summary</h2>
+		<p>
+			I'm Guillaume, a software engineer with 16 years of experience building and scaling
+			high-performance systems - primarily in the financial industry. I've worked across the full
+			stack, from low-latency infrastructure and in-house databases to risk analytics platforms and
+			container orchestration at massive scale.
+		</p>
+		<p>
+			I enjoy solving complex engineering challenges, especially those involving performance,
+			scale, and architecture. I’ve worked in both large global teams and startup-style
+			environments, led development efforts, and collaborated directly with traders, product
+			managers, and client teams.
+		</p>
+	</div>
+	<div class="mt-8"><SocialList /></div>
+</PageLayout>

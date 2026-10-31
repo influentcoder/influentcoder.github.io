@@ -1,31 +1,22 @@
 {
-    // Prettier
-    "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true,
-    // Shopify Liquid
-    "files.associations": {
-      "*.html": "liquid"
-    },
-    "[markdown]": {
-      "editor.defaultFormatter": "yzhang.markdown-all-in-one"
-    },
-    // Formatter
-    "[html][liquid]": {
-      "editor.defaultFormatter": "Shopify.theme-check-vscode"
-    },
-    "[shellscript]": {
-      "editor.defaultFormatter": "mkhl.shfmt"
-    },
-    // Disable vscode built-in stylelint
-    "css.validate": false,
-    "scss.validate": false,
-    "less.validate": false,
-    // Stylint extension settings
-    "stylelint.snippet": ["css", "scss"],
-    "stylelint.validate": ["css", "scss"],
-    // Run tasks in macOS
-    "terminal.integrated.profiles.osx": {
-      "zsh": { "path": "/bin/zsh", "args": ["-l", "-i"] }
-    }
-  }
-  
+	"[javascript]": { "editor.defaultFormatter": "biomejs.biome" },
+	"[typescript]": { "editor.defaultFormatter": "biomejs.biome" },
+	"[javascriptreact]": { "editor.defaultFormatter": "biomejs.biome" },
+	"[typescriptreact]": { "editor.defaultFormatter": "biomejs.biome" },
+	"[json][jsonc]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[astro]": { "editor.defaultFormatter": "astro-build.astro-vscode" },
+	"[markdown]": { "editor.wordWrap": "on" },
+	"editor.formatOnSave": true,
+	"editor.codeActionsOnSave": {
+		"source.fixAll.biome": "explicit",
+		"source.organizeImports.biome": "explicit"
+	},
+	"typescript.tsdk": "node_modules/typescript/lib",
+	"astro.content-intellisense": true,
+	"files.associations": {
+		"*.css": "tailwindcss"
+	},
+	"tailwindCSS.experimental.configFile": "./src/styles/global.css"
+}

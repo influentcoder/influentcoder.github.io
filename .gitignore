@@ -1,24 +1,20 @@
-# Bundler cache
-.bundle
-vendor
+# Build output and Astro's generated types
+dist/
+.astro/
 
-# Jekyll cache
-.jekyll-cache
-.jekyll-metadata
-_site
+# Dependencies
+node_modules/
 
-# RubyGems
-*.gem
-
-# NPM dependencies
-node_modules
-
-# Envoy config validation output (make envoy-examples)
-.envoy-examples
+# Environment variables
+.env
+.env.production
 
 # Playwright output
-test-results
-playwright-report
+test-results/
+playwright-report/
+
+# Envoy config validation output (make envoy-examples)
+.envoy-examples/
 
 # IDE configurations
 .idea
@@ -27,6 +23,5 @@ playwright-report
 !.vscode/extensions.json
 !.vscode/tasks.json
 
-# Misc
-_sass/vendors
-assets/js/dist
+# macOS
+.DS_Store

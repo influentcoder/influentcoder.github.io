@@ -1,6 +1,6 @@
 ---
 name: edit-post
-description: Write, rewrite or edit a blog post in _posts/ in the author's own voice. Use for any change to post wording or structure, including removing LLM-style writing from existing posts.
+description: Write, rewrite or edit a blog post in content/posts/ in the author's own voice. Use for any change to post wording or structure, including removing LLM-style writing from existing posts.
 ---
 
 # Editing posts in the author's voice
@@ -18,18 +18,19 @@ The goal of any edit is a post that sounds like the author wrote it, not a
 2. **Every command and output must be real.** Run each command and paste its
    actual output. If you can't run something (needs a cluster, cloud account,
    root), say so in the PR. Fix or remove examples that are wrong.
-3. **Never rename a post file.** The filename is the URL. Titles can change.
-4. **Check the history first:** `git log --follow -p -- _posts/<file>`. If an
+3. **Never rename a post file.** The filename (or folder name) is the URL
+   (`/posts/<slug>/`). Titles can change.
+4. **Check the history first:** `git log --follow -p -- content/posts/<file>`. If an
    earlier version exists from before the 2025 rewrite, restore it and only
    fix typos and broken things (this was done for the GRUB and Kerberos posts).
 5. `make check` must pass. It includes the prose check, which fails on any
-   warning in any post; `make prose POST=_posts/<file>` checks one post.
+   warning in any post; `make prose POST=content/posts/<file>` checks one post.
 
 ## The author's voice
 
 Taken from the posts the author wrote themselves
-(`2023-12-19-reinstall-grub-arch-linux.md`,
-`2023-11-12-walkthrough-setup-kerberos-linux.md`). Read one before editing.
+(`content/posts/reinstall-grub-arch-linux.md`,
+`content/posts/walkthrough-setup-kerberos-linux.md`). Read one before editing.
 
 - **First person, and says why the post exists.** "My motivation to write this
   article is for myself, to remember how to get out of this situation again if
@@ -55,23 +56,28 @@ Taken from the posts the author wrote themselves
   Key takeaways or Wrapping up sections. Start with why the post exists; stop
   when the content is done. A short "Additional resources" list is fine.
 - No `---` separators between sections; headings already separate them.
-- Bold only for a real warning (data loss, security). Not for emphasis.
+- Bold only for a real warning (data loss, security). Not for emphasis. For a
+  warning or note that deserves its own box, use an admonition instead:
+  `:::caution` … `:::` (also `:::note`, `:::tip`, `:::important`, `:::warning`).
 - Prose for reasoning and explanations; lists only for things that really are
   lists (prompts to answer, files to edit, options).
+- Code blocks use Expressive Code: give a file's code block its file name
+  (```` ```c title="walk.c" ````), and use ```` ```sh ```` for commands with the
+  output in a separate plain ```` ``` ```` block, so readers can copy the commands.
 - Shorter is better. Cut anything a reader of this blog already knows.
 - The front matter `description` is shown under the title. Write it the way
   the author would introduce the post, ideally from the post's own first lines.
 
 ## Words and phrases to avoid
 
-`tools/check_prose.rb` has the full list (delve, landscape, crucial,
+`tools/check-prose.mjs` has the full list (delve, landscape, crucial,
 seamless, robust, leverage, comprehensive, "it's important to note", "let's
 dive in", "whether you're", "plays a key role", "in conclusion", and more).
 Don't swap them for synonyms; rewrite the sentence plainly or delete it.
 
 ## Workflow for a post without an earlier draft
 
-1. Read the post. Run `make prose POST=_posts/<file>` to see the patterns.
+1. Read the post. Run `make prose POST=content/posts/<file>` to see the patterns.
 2. Fact-check: run every command, check every claim you can. Note bugs.
 3. Ask the author a few short questions before rewriting, e.g.:
    - Why did you write this post? What were you working on at the time?
@@ -79,7 +85,7 @@ Don't swap them for synonyms; rewrite the sentence plainly or delete it.
    - What tripped you up or surprised you?
    - Should it stay broad, or become a shorter "how I use it" post?
 4. Rewrite using only the author's answers plus verified facts.
-5. Run `make prose POST=_posts/<file>` (must be clean) and `make check`.
+5. Run `make prose POST=content/posts/<file>` (must be clean) and `make check`.
 6. PR description: bugs found (with evidence), what changed, and the
    first-person lines for the author to confirm.
 

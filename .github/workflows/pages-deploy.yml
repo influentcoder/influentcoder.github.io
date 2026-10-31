@@ -30,21 +30,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0 # full history, for the posts' last-modified dates
-
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          bundler-cache: true # Ruby version comes from .ruby-version
 
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
-      - name: Install test dependencies
+      - name: Install dependencies
         run: |
           npm ci
           npx playwright install --with-deps chromium
@@ -67,7 +60,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v5
         with:
-          path: _site
+          path: dist
 
   deploy:
     if: github.event_name != 'pull_request'
