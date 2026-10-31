@@ -773,7 +773,7 @@ Common use case:
 ```bash
 # Enter a running Podman container
 podman ps
-podman inspect --format '{{.State.Pid}}' <container_id>
+podman inspect --format '{% raw %}{{.State.Pid}}{% endraw %}' <container_id>
 
 # Then:
 sudo nsenter --target <PID> --mount bash
