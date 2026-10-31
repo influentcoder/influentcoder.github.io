@@ -22,7 +22,7 @@ File.write(path, <<~POST)
   layout: post
   title:  #{title.inspect}
   date:   #{date.strftime('%Y-%m-%d')} 00:00:00 +0800
-  categories: CHANGE-ME
+  categories: [CHANGE-ME]   # see CATEGORIES in tools/check_posts.rb
   description: >-
     CHANGE ME: one or two sentences (50-200 characters) shown in previews and search results.
   tags: [change-me]

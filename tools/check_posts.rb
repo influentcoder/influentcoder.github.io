@@ -14,6 +14,15 @@ FILENAME = /\A(\d{4}-\d{2}-\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*\.md\z/
 TAG = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/
 DESCRIPTION_LENGTH = (50..200)
 
+# Allowed categories: top level => allowed sub-categories (Chirpy supports one sub-level).
+# Add to this list deliberately; reuse an existing category whenever one fits.
+CATEGORIES = {
+  "Linux" => %w[Filesystems Administration],
+  "Tools" => [],
+  "Cloud" => %w[AWS Networking],
+  "Engineering" => [],
+}.freeze
+
 def check(path)
   errors = []
   name = File.basename(path)
@@ -43,7 +52,15 @@ def check(path)
     errors << "date (#{date_str}) does not match the filename date (#{match[1]})"
   end
 
-  errors << "categories is required" if data["categories"].to_s.strip.empty?
+  cats = data["categories"]
+  if !cats.is_a?(Array) || cats.empty? || cats.size > 2
+    errors << "categories must be a list of 1-2 entries, e.g. categories: [Linux, Filesystems]"
+  elsif !CATEGORIES.key?(cats[0])
+    errors << "unknown category #{cats[0].inspect}; allowed: #{CATEGORIES.keys.join(', ')}"
+  elsif cats[1] && !CATEGORIES[cats[0]].include?(cats[1])
+    allowed = CATEGORIES[cats[0]].empty? ? "none" : CATEGORIES[cats[0]].join(", ")
+    errors << "unknown sub-category #{cats[1].inspect} under #{cats[0]}; allowed: #{allowed}"
+  end
 
   desc = data["description"]
   if !desc.is_a?(String) || desc.strip.empty?

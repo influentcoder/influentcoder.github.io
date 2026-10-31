@@ -2,7 +2,7 @@
 layout: post
 title:  "Reinstall GRUB on a dual boot setup with Arch Linux and Windows"
 date:   2023-12-19 00:00:00 +0800
-categories: linux
+categories: [Linux, Administration]
 description: >-
   How to recover a dual-boot Arch Linux and Windows machine after a BIOS update breaks GRUB, using an Arch live USB on a UEFI/GPT system.
 tags: [grub, arch-linux, dual-boot, uefi]

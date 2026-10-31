@@ -30,15 +30,17 @@ Requires Ruby (version in `.ruby-version`) and Node 22.
   layout: post
   title:  "Human title"
   date:   2025-06-08 00:00:00 +0800   # must match the filename date
-  categories: linux                   # space-separated; Chirpy nests the 2nd under the 1st
+  categories: [Linux, Filesystems]   # 1-2 entries; the 2nd is a sub-category
   description: >-
     50-200 characters. Used for home-page previews, search results and SEO.
   tags: [lowercase, hyphenated-tags]
   ---
   ```
 
-- Reuse existing categories and tags where possible:
-  `grep -h "^categories:\|^tags:" _posts/*.md | sort | uniq -c`.
+- Categories must come from `CATEGORIES` in `tools/check_posts.rb`
+  (Linux › Filesystems/Administration, Tools, Cloud › AWS/Networking,
+  Engineering). Only add a new one when no existing category fits.
+- Reuse existing tags where possible: `grep -h "^tags:" _posts/*.md | sort | uniq -c`.
 - Images go in `assets/img/posts/<slug>/` and are referenced as
   `/assets/img/posts/<slug>/file.png`.
 

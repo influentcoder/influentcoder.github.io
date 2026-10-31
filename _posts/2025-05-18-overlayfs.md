@@ -2,7 +2,7 @@
 layout: post
 title:  "Demystifying Overlay File Systems"
 date:   2025-05-18 00:00:00 +0800
-categories: linux
+categories: [Linux, Filesystems]
 description: >-
   How overlay file systems stack read-only and writable layers into one view, with hands-on examples and how containers rely on them.
 tags: [overlayfs, filesystems, containers]
