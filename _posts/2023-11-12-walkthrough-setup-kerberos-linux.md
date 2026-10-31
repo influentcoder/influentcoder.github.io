@@ -1,8 +1,11 @@
 ---
 layout: post
-title:  "Walkthough Guide: How to Set Up Kerberos Authentication on Linux"
+title:  "Walkthrough Guide: How to Set Up Kerberos Authentication on Linux"
 date:   2023-11-12 13:22:26 +0800
-categories: authentication kerberos
+categories: [Linux, Administration]
+description: >-
+  Step-by-step guide to setting up a Kerberos KDC on Linux and using it to authenticate SSH sessions between a client and a server.
+tags: [kerberos, ssh, linux, authentication]
 ---
 
 Setting up Kerberos authentication on Linux can be incredibly useful for

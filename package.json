@@ -1,0 +1,11 @@
+{
+  "name": "influentcoder-site",
+  "private": true,
+  "description": "Browser smoke tests for the Jekyll site (see Makefile).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

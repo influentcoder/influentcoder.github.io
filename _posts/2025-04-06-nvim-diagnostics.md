@@ -2,7 +2,10 @@
 layout: post
 title:  "Understanding Diagnostics in Neovim"
 date:   2025-04-06 00:00:00 +0800
-categories: neovim nvim
+categories: [Tools]
+description: >-
+  Why inline diagnostics disappeared in Neovim 0.11, and how namespaces, virtual text and vim.diagnostic.config control what you see.
+tags: [neovim, lsp, diagnostics]
 ---
 
 ## Problem

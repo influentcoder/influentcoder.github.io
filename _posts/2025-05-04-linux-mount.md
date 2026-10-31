@@ -2,7 +2,10 @@
 layout: post
 title:  "Understanding Mounts and Mount Namespaces in Linux"
 date:   2025-05-04 00:00:00 +0800
-categories: other
+categories: [Linux, Filesystems]
+description: >-
+  A deep dive into Linux mounts: mount types, how mounting works internally, mount propagation, and how mount namespaces isolate containers.
+tags: [mounts, namespaces, containers, filesystems]
 ---
 
 ## 🧠 Introduction

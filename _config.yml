@@ -213,7 +213,14 @@ exclude:
   - README.md
   - LICENSE
   - "*.config.js"
+  - "*.config.ts"
   - package*.json
+  - tests
+  - test-results
+  - playwright-report
+  - Makefile
+  - CLAUDE.md
+  - AGENTS.md
 
 jekyll-archives:
   enabled: [categories, tags]

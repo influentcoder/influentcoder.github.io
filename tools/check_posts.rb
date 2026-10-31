@@ -1,0 +1,97 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+#
+# Validate the front matter of every post in _posts/.
+#
+# Usage: ruby tools/check_posts.rb [FILE...]
+
+require "date"
+require "yaml"
+
+Encoding.default_external = Encoding::UTF_8
+
+FILENAME = /\A(\d{4}-\d{2}-\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*\.md\z/
+TAG = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/
+DESCRIPTION_LENGTH = (50..200)
+
+# Allowed categories: top level => allowed sub-categories (Chirpy supports one sub-level).
+# Add to this list deliberately; reuse an existing category whenever one fits.
+CATEGORIES = {
+  "Linux" => %w[Filesystems Administration],
+  "Tools" => [],
+  "Cloud" => %w[AWS Networking],
+  "Engineering" => [],
+}.freeze
+
+def check(path)
+  errors = []
+  name = File.basename(path)
+  match = FILENAME.match(name)
+  errors << "filename must look like YYYY-MM-DD-lowercase-slug.md" unless match
+
+  src = File.read(path)
+  fm = src[/\A---\n(.*?)\n---\n/m, 1]
+  return errors << "missing front matter block" unless fm
+
+  begin
+    data = YAML.safe_load(fm, permitted_classes: [Date, Time]) || {}
+  rescue Psych::Exception => e
+    return errors << "front matter is not valid YAML: #{e.message}"
+  end
+
+  errors << "replace the CHANGE-ME placeholders from tools/new_post.rb" if fm.match?(/change[ -]me/i)
+
+  title = data["title"]
+  errors << "title is required" unless title.is_a?(String) && !title.strip.empty?
+
+  date = data["date"]
+  date_str = date.is_a?(Time) || date.is_a?(Date) ? date.strftime("%Y-%m-%d") : date.to_s[0, 10]
+  if date.nil?
+    errors << "date is required"
+  elsif match && date_str != match[1]
+    errors << "date (#{date_str}) does not match the filename date (#{match[1]})"
+  end
+
+  cats = data["categories"]
+  if !cats.is_a?(Array) || cats.empty? || cats.size > 2
+    errors << "categories must be a list of 1-2 entries, e.g. categories: [Linux, Filesystems]"
+  elsif !CATEGORIES.key?(cats[0])
+    errors << "unknown category #{cats[0].inspect}; allowed: #{CATEGORIES.keys.join(', ')}"
+  elsif cats[1] && !CATEGORIES[cats[0]].include?(cats[1])
+    allowed = CATEGORIES[cats[0]].empty? ? "none" : CATEGORIES[cats[0]].join(", ")
+    errors << "unknown sub-category #{cats[1].inspect} under #{cats[0]}; allowed: #{allowed}"
+  end
+
+  desc = data["description"]
+  if !desc.is_a?(String) || desc.strip.empty?
+    errors << "description is required"
+  elsif !DESCRIPTION_LENGTH.cover?(desc.strip.length)
+    errors << "description must be #{DESCRIPTION_LENGTH.min}-#{DESCRIPTION_LENGTH.max} characters (is #{desc.strip.length})"
+  end
+
+  tags = data["tags"]
+  if !tags.is_a?(Array) || tags.empty?
+    errors << "tags must be a non-empty list, e.g. tags: [linux, filesystems]"
+  else
+    bad = tags.reject { |t| t.is_a?(String) && TAG.match?(t) }
+    errors << "tags must be lowercase-hyphenated: #{bad.join(', ')}" unless bad.empty?
+  end
+
+  errors
+end
+
+files = ARGV.empty? ? Dir["_posts/*"].sort : ARGV
+failed = 0
+files.each do |path|
+  errors = check(path)
+  next if errors.empty?
+
+  failed += 1
+  errors.each { |e| warn "#{path}: #{e}" }
+end
+
+if failed.positive?
+  warn "\n#{failed} of #{files.size} posts have front matter errors."
+  exit 1
+end
+puts "Front matter OK (#{files.size} posts)."
