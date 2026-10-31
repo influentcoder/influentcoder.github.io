@@ -6,8 +6,8 @@
 # and em-dash use, and broken code fences. See .claude/skills/edit-post/.
 #
 # Usage: ruby tools/check_prose.rb [--strict] [--quiet] [FILE...]
-#   Warnings only by default; --strict exits 1 if anything is found;
-#   --quiet prints only the per-post totals.
+#   Warnings only by default; --strict exits 1 if anything is found (this is
+#   what `make prose` and `make check` use); --quiet prints only the totals.
 
 Encoding.default_external = Encoding::UTF_8
 

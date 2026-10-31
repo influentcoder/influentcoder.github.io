@@ -13,10 +13,10 @@ Everything goes through `make` (run `make help` for the list):
 |---|---|
 | `make install` | Install gems (into `.bundle/`) and the Playwright test runner |
 | `make serve` | Dev server with live rebuild at http://127.0.0.1:4000 |
-| `make check` | **Run before every push.** Lint posts, production build, link check, browser tests. CI runs exactly this. |
+| `make check` | **Run before every push.** Lint posts, prose check, production build, link check, browser tests. CI runs exactly this. |
 | `make new-post TITLE="..."` | Create a post with the required front matter |
-| `make prose` | Flag LLM-style writing in posts (warnings). `make prose POST=_posts/x.md` is strict for one post. |
-| `make lint` / `build` / `links` / `test` | The individual steps of `make check` (`test` and `links` need a prior `build`) |
+| `make prose` | Fail on LLM-style writing in any post (`POST=_posts/x.md` for one post). Part of `make check`, so CI fails on it too. |
+| `make lint` / `prose` / `build` / `links` / `test` | The individual steps of `make check` (`test` and `links` need a prior `build`) |
 
 Requires Ruby (version in `.ruby-version`) and Node 22.
 
@@ -45,6 +45,11 @@ rules for editing: never invent experience, run every command, keep the URL.
 - Categories must come from `CATEGORIES` in `tools/check_posts.rb`
   (Linux › Filesystems/Administration, Tools, Cloud › AWS/Networking,
   Engineering). Only add a new one when no existing category fits.
+- Every post must pass the prose check (`tools/check_prose.rb`): no emoji, bold
+  or numbered headings, no Abstract/Conclusion-style sections, at most 5 bold
+  spans and 3 em-dashes, no stock LLM phrases. If a rule gets in the way of
+  something the author really wants to write, change the rule in that file
+  rather than working around it.
 - Reuse existing tags where possible: `grep -h "^tags:" _posts/*.md | sort | uniq -c`.
 - Images go in `assets/img/posts/<slug>/` and are referenced as
   `/assets/img/posts/<slug>/file.png`.

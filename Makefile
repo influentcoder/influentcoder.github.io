@@ -38,8 +38,8 @@ lint: ## Validate post filenames and front matter, and the Envoy post's config e
 	@ruby tools/check_posts.rb
 	@ruby tools/check_envoy_examples.rb
 
-prose: ## Flag LLM-style writing in posts (warnings only; POST=_posts/x.md for one post)
-	@ruby tools/check_prose.rb $(if $(POST),--strict $(POST))
+prose: ## Fail on LLM-style writing in posts (POST=_posts/x.md for one post)
+	@ruby tools/check_prose.rb --strict $(POST)
 
 links: ## Check internal links, images and scripts in the built site
 	@out=$$(bundle exec htmlproofer $(SITE) --disable-external \
@@ -51,8 +51,7 @@ links: ## Check internal links, images and scripts in the built site
 test: ## Browser smoke tests (Playwright) against the built site
 	npx playwright test
 
-check: lint build links test ## Everything CI runs: lint, build, links, browser tests (+ prose summary)
-	@ruby tools/check_prose.rb --quiet
+check: lint prose build links test ## Everything CI runs: lint, prose, build, links, browser tests
 
 envoy-examples: ## Validate the Envoy post's full configs with Envoy (needs Docker; CI runs this)
 	@rm -rf $(ENVOY_DIR) && ruby tools/check_envoy_examples.rb _posts/2025-06-01-envoy.md $(ENVOY_DIR)
